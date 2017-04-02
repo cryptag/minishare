@@ -5,22 +5,26 @@ package miniware
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
-	"strings"
 	"sync"
+	"time"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/cathalgarvey/go-minilock/taber"
 	gorillacontext "github.com/gorilla/context"
+	"github.com/gorilla/websocket"
 )
 
 const (
 	MINILOCK_ID_KEY      = "minilock_id"
 	MINILOCK_KEYPAIR_KEY = "minilock_keypair"
+	WEBSOCKET_CONNECTION = "websocket_connection"
 )
 
 var (
-	ErrAuthTokenNotFound = errors.New("Auth token not found")
+	ErrAuthTokenNotFound  = errors.New("Auth token not found")
+	ErrMinilockIDNotFound = errors.New("miniLock ID not found")
 )
 
 type Mapper struct {
@@ -51,12 +55,58 @@ func (m *Mapper) SetMinilockID(authToken, mID string) error {
 	return nil
 }
 
-func Auth(h http.Handler, m *Mapper, writeError func(w http.ResponseWriter, errStr string, secretErr error, statusCode int) error) func(w http.ResponseWriter, req *http.Request) {
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+}
+
+func Auth(h http.Handler, m *Mapper) func(w http.ResponseWriter, req *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
-		authToken := parseAuthTokenFromHeader(req)
-		if authToken == "" {
-			writeError(w, "Auth token missing", nil, http.StatusUnauthorized)
+		wsConn, err := upgrader.Upgrade(w, req, nil)
+		if err != nil {
+			errStr := "Unable to upgrade to websocket conn"
+			log.Debug(errStr)
+			wsConn.WriteMessage(websocket.TextMessage, []byte(errStr))
 			return
+		}
+
+		var authToken string
+
+		auth := make(chan interface{})
+
+		go func() {
+			messageType, p, err := wsConn.ReadMessage()
+			if err != nil {
+				auth <- err
+				return
+			}
+			if messageType != websocket.TextMessage {
+				auth <- fmt.Errorf("Wanted type %s, got %s",
+					websocket.TextMessage, messageType)
+				return
+			}
+			auth <- string(p)
+		}()
+
+		timeout := time.After(5 * time.Second)
+		select {
+		case <-timeout:
+			errStr := "Timed out; didn't send miniLock ID/room ID fast enough"
+			writeWSError(wsConn, errStr)
+			return
+
+		case token := <-auth:
+			switch maybeToken := token.(type) {
+			case error:
+				errStr := maybeToken.Error()
+				writeWSError(wsConn, errStr)
+				return
+
+			case string:
+				authToken = maybeToken
+
+				// FALL THROUGH
+			}
 		}
 
 		mID, err := m.GetMinilockID(authToken)
@@ -65,7 +115,8 @@ func Auth(h http.Handler, m *Mapper, writeError func(w http.ResponseWriter, errS
 			if err == ErrAuthTokenNotFound {
 				status = http.StatusUnauthorized
 			}
-			writeError(w, "Error authorizing you", err, status)
+			log.Debugf("%v error from GetMinilockID: %v", status, err)
+			writeWSError(wsConn, "Error authorizing you")
 			return
 		}
 
@@ -77,20 +128,39 @@ func Auth(h http.Handler, m *Mapper, writeError func(w http.ResponseWriter, errS
 
 		keypair, err := taber.FromID(mID)
 		if err != nil {
-			writeError(w, "Your miniLock ID is invalid?...", err,
-				http.StatusInternalServerError)
+			log.Debugf("Error from GetMinilockID: %v", err)
+			writeWSError(wsConn, "Your miniLock ID is invalid?...")
 			return
 		}
 
 		gorillacontext.Set(req, MINILOCK_ID_KEY, mID)
 		gorillacontext.Set(req, MINILOCK_KEYPAIR_KEY, keypair)
+		gorillacontext.Set(req, WEBSOCKET_CONNECTION, wsConn)
 
 		h.ServeHTTP(w, req)
 	}
 }
 
-func parseAuthTokenFromHeader(req *http.Request) string {
-	bearerAndToken := req.Header.Get("Authorization")
-	token := strings.TrimLeft(bearerAndToken, "Bearer ")
-	return token
+func GetMinilockID(req *http.Request) (string, error) {
+	mID := gorillacontext.Get(req, MINILOCK_ID_KEY)
+	mIDStr, ok := mID.(string)
+	if !ok {
+		return "", ErrMinilockIDNotFound
+	}
+	return mIDStr, nil
+}
+
+func GetWebsocketConn(req *http.Request) (*websocket.Conn, error) {
+	wsConnInterface := gorillacontext.Get(req, WEBSOCKET_CONNECTION)
+	wsConn, ok := wsConnInterface.(*websocket.Conn)
+	if !ok {
+		return nil, ErrMinilockIDNotFound
+	}
+	return wsConn, nil
+}
+
+func writeWSError(wsConn *websocket.Conn, errStr string) error {
+	log.Debug(errStr)
+	resp := fmt.Sprintf(`{"error":%q}`, errStr)
+	return wsConn.WriteMessage(websocket.TextMessage, []byte(resp))
 }
