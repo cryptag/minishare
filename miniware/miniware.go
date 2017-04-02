@@ -80,6 +80,7 @@ func Auth(h http.Handler, m *Mapper) func(w http.ResponseWriter, req *http.Reque
 				auth <- err
 				return
 			}
+			log.Debugf("Received message of type %v: `%s`", messageType, p)
 			if messageType != websocket.TextMessage {
 				auth <- fmt.Errorf("Wanted type %s, got %s",
 					websocket.TextMessage, messageType)
@@ -162,5 +163,7 @@ func GetWebsocketConn(req *http.Request) (*websocket.Conn, error) {
 func writeWSError(wsConn *websocket.Conn, errStr string) error {
 	log.Debug(errStr)
 	resp := fmt.Sprintf(`{"error":%q}`, errStr)
-	return wsConn.WriteMessage(websocket.TextMessage, []byte(resp))
+	err := wsConn.WriteMessage(websocket.TextMessage, []byte(resp))
+	// wsConn.Close()
+	return err
 }
