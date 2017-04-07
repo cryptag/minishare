@@ -82,7 +82,7 @@ func Auth(h http.Handler, m *Mapper) func(w http.ResponseWriter, req *http.Reque
 			}
 			log.Debugf("Received message of type %v: `%s`", messageType, p)
 			if messageType != websocket.TextMessage {
-				auth <- fmt.Errorf("Wanted type %s, got %s",
+				auth <- fmt.Errorf("Wanted type %v (TextMessage), got %v",
 					websocket.TextMessage, messageType)
 				return
 			}
