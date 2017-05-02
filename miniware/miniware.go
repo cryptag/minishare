@@ -67,8 +67,8 @@ func Auth(h http.Handler, m *Mapper) func(w http.ResponseWriter, req *http.Reque
 		wsConn, err := upgrader.Upgrade(w, req, nil)
 		if err != nil {
 			errStr := "Unable to upgrade to websocket conn"
-			log.Debug(errStr)
-			wsConn.WriteMessage(websocket.TextMessage, []byte(errStr))
+			log.Debug(errStr + ": " + err.Error())
+			writeError(w, errStr, http.StatusBadRequest)
 			return
 		}
 
@@ -168,4 +168,9 @@ func writeWSError(wsConn *websocket.Conn, errStr string) error {
 	err := wsConn.WriteMessage(websocket.TextMessage, []byte(resp))
 	// wsConn.Close()
 	return err
+}
+
+func writeError(w http.ResponseWriter, errStr string, statusCode int) {
+	errJSON := fmt.Sprintf(`{"error":%q}`, errStr)
+	http.Error(w, errJSON, statusCode)
 }
