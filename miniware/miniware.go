@@ -166,7 +166,7 @@ func writeWSError(wsConn *websocket.Conn, errStr string) error {
 	log.Debug(errStr)
 	resp := fmt.Sprintf(`{"error":%q}`, errStr)
 	err := wsConn.WriteMessage(websocket.TextMessage, []byte(resp))
-	// wsConn.Close()
+	wsConn.Close()
 	return err
 }
 
