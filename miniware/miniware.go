@@ -20,6 +20,8 @@ const (
 	MINILOCK_ID_KEY      = "minilock_id"
 	MINILOCK_KEYPAIR_KEY = "minilock_keypair"
 	WEBSOCKET_CONNECTION = "websocket_connection"
+
+	AuthError = "Error authorizing you"
 )
 
 var (
@@ -117,7 +119,7 @@ func Auth(h http.Handler, m *Mapper) func(w http.ResponseWriter, req *http.Reque
 				status = http.StatusUnauthorized
 			}
 			log.Debugf("%v error from GetMinilockID: %v", status, err)
-			writeWSError(wsConn, "Error authorizing you")
+			writeWSError(wsConn, AuthError)
 			return
 		}
 
